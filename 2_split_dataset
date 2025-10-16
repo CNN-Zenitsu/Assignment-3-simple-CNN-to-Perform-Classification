@@ -1,18 +1,16 @@
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
-# Path to dataset
 data_dir = "/content/RealWaste"
 
-# Parameters
 img_height, img_width = 128*2, 128*2
 batch_size = 32
 seed = 123
 
-# --- Step 1: Split 70% train, 30% temp (val + test) ---
+#Split 70% train, 30% temp (val + test)
 train_ds_raw = tf.keras.utils.image_dataset_from_directory(
     data_dir,
-    validation_split=0.3,   # 30% goes to temp
+    validation_split=0.3,
     subset="training",
     seed=seed,
     image_size=(img_height, img_width),
@@ -28,18 +26,16 @@ temp_ds_raw = tf.keras.utils.image_dataset_from_directory(
     batch_size=batch_size
 )
 
-# ✅ Save class names BEFORE mapping
 class_names = train_ds_raw.class_names
 num_classes = len(class_names)
 print("Classes:", class_names)
 
-# --- Step 2: Split temp_ds into 15% validation + 15% test ---
-# (0.15 / 0.30 = 0.5 → half of temp_ds)
+#Split temp_ds into 15% validation + 15% test 
 val_size = 0.5
 val_ds_raw = temp_ds_raw.take(int(len(temp_ds_raw) * val_size))
 test_ds_raw = temp_ds_raw.skip(int(len(temp_ds_raw) * val_size))
 
-# --- Step 3: Normalize and prefetch ---
+# Normalize and prefetch
 normalization_layer = tf.keras.layers.Rescaling(1./255)
 
 train_ds = train_ds_raw.map(lambda x, y: (normalization_layer(x), y))
@@ -54,6 +50,6 @@ test_ds = test_ds.cache().prefetch(AUTOTUNE)
 print("\n✅ Dataset Splits:")
 print(f"Training batches: {len(train_ds)}")
 print(f"Validation batches: {len(val_ds)}")
-print(f"Testing batches: {len(test_ds)}")
+print(f"Testing batches: {len(test_ds)}") 
 
 
