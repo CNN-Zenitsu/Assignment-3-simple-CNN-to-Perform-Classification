@@ -34,3 +34,4 @@ model = tf.keras.Sequential([
 
 model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
 model.fit(train_gen, validation_data=val_gen, epochs=30)
+
