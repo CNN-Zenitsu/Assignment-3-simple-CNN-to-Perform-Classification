@@ -1,0 +1,415 @@
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import ResNet50, DenseNet121
+from tensorflow.keras.optimizers import Adam
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+import seaborn as sns
+import pandas as pd
+
+# img_height = 224
+# img_width = 224
+
+# ============================================================================
+# MODEL 1: ResNet50 (Fine-tuning)
+# ============================================================================
+
+base_model_resnet = ResNet50(
+    weights='imagenet',
+    include_top=False,
+    input_shape=(img_height, img_width, 3)
+)
+
+base_model_resnet.trainable = False
+
+model_resnet = models.Sequential([
+    base_model_resnet,
+    layers.GlobalAveragePooling2D(),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(num_classes, activation='softmax')
+], name='ResNet50_Transfer')
+
+model_resnet.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model_resnet.summary()
+
+# ============================================================================
+# MODEL 2: DenseNet121 (Fine-tuning)
+# ============================================================================
+
+base_model_densenet = DenseNet121(
+    weights='imagenet',
+    include_top=False,
+    input_shape=(img_height, img_width, 3)
+)
+
+base_model_densenet.trainable = False
+
+model_densenet = models.Sequential([
+    base_model_densenet,
+    layers.GlobalAveragePooling2D(),
+    layers.BatchNormalization(),
+    layers.Dense(512, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(256, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(num_classes, activation='softmax')
+], name='DenseNet121_Transfer')
+
+model_densenet.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model_densenet.summary()
+
+# ============================================================================
+# TRAINING CONFIGURATIONS
+# ============================================================================
+
+callbacks_resnet = [
+    tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=10,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=5,
+        min_lr=1e-7,
+        verbose=1
+    ),
+    tf.keras.callbacks.ModelCheckpoint(
+        'resnet50_best.h5',
+        monitor='val_accuracy',
+        save_best_only=True,
+        verbose=1
+    )
+]
+
+callbacks_densenet = [
+    tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=10,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=5,
+        min_lr=1e-7,
+        verbose=1
+    ),
+    tf.keras.callbacks.ModelCheckpoint(
+        'densenet121_best.h5',
+        monitor='val_accuracy',
+        save_best_only=True,
+        verbose=1
+    )
+]
+
+# ============================================================================
+# PHASE 1: Train with frozen base models
+# ============================================================================
+
+history_resnet_phase1 = model_resnet.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=20,
+    callbacks=callbacks_resnet,
+    verbose=1
+)
+
+history_densenet_phase1 = model_densenet.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=20,
+    callbacks=callbacks_densenet,
+    verbose=1
+)
+
+# ============================================================================
+# PHASE 2: Fine-tune with unfrozen layers
+# ============================================================================
+
+base_model_resnet.trainable = True
+for layer in base_model_resnet.layers[:-30]:
+    layer.trainable = False
+
+model_resnet.compile(
+    optimizer=Adam(learning_rate=0.0001),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+history_resnet_phase2 = model_resnet.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=30,
+    initial_epoch=len(history_resnet_phase1.history['loss']),
+    callbacks=callbacks_resnet,
+    verbose=1
+)
+
+base_model_densenet.trainable = True
+for layer in base_model_densenet.layers[:-30]:
+    layer.trainable = False
+
+model_densenet.compile(
+    optimizer=Adam(learning_rate=0.0001),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+history_densenet_phase2 = model_densenet.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=30,
+    initial_epoch=len(history_densenet_phase1.history['loss']),
+    callbacks=callbacks_densenet,
+    verbose=1
+)
+
+# ============================================================================
+# COMBINE TRAINING HISTORIES
+# ============================================================================
+
+history_resnet = {
+    'accuracy': history_resnet_phase1.history['accuracy'] + history_resnet_phase2.history['accuracy'],
+    'val_accuracy': history_resnet_phase1.history['val_accuracy'] + history_resnet_phase2.history['val_accuracy'],
+    'loss': history_resnet_phase1.history['loss'] + history_resnet_phase2.history['loss'],
+    'val_loss': history_resnet_phase1.history['val_loss'] + history_resnet_phase2.history['val_loss']
+}
+
+history_densenet = {
+    'accuracy': history_densenet_phase1.history['accuracy'] + history_densenet_phase2.history['accuracy'],
+    'val_accuracy': history_densenet_phase1.history['val_accuracy'] + history_densenet_phase2.history['val_accuracy'],
+    'loss': history_densenet_phase1.history['loss'] + history_densenet_phase2.history['loss'],
+    'val_loss': history_densenet_phase1.history['val_loss'] + history_densenet_phase2.history['val_loss']
+}
+
+# ============================================================================
+# STEP 2: EVALUATION ON TEST SET
+# ============================================================================
+
+print("\nResNet50:")
+test_loss_resnet, test_acc_resnet = model_resnet.evaluate(test_ds)
+print(f"Test Accuracy: {test_acc_resnet*100:.2f}%")
+print(f"Test Loss: {test_loss_resnet:.4f}")
+
+print("\nDenseNet121:")
+test_loss_densenet, test_acc_densenet = model_densenet.evaluate(test_ds)
+print(f"Test Accuracy: {test_acc_densenet*100:.2f}%")
+print(f"Test Loss: {test_loss_densenet:.4f}")
+
+# ============================================================================
+# STEP 3: PLOTTING TRAINING HISTORIES
+# ============================================================================
+
+fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+
+# ResNet50
+axes[0, 0].plot(history_resnet['accuracy'], label='Train', linewidth=2)
+axes[0, 0].plot(history_resnet['val_accuracy'], label='Val', linewidth=2)
+axes[0, 0].axvline(x=len(history_resnet_phase1.history['accuracy']),
+                   color='r', linestyle='--', label='Fine-tuning starts')
+axes[0, 0].set_title('ResNet50 - Accuracy', fontsize=14, fontweight='bold')
+axes[0, 0].set_xlabel('Epoch')
+axes[0, 0].set_ylabel('Accuracy')
+axes[0, 0].legend()
+axes[0, 0].grid(True, alpha=0.3)
+
+axes[1, 0].plot(history_resnet['loss'], label='Train', linewidth=2)
+axes[1, 0].plot(history_resnet['val_loss'], label='Val', linewidth=2)
+axes[1, 0].axvline(x=len(history_resnet_phase1.history['loss']),
+                   color='r', linestyle='--', label='Fine-tuning starts')
+axes[1, 0].set_title('ResNet50 - Loss', fontsize=14, fontweight='bold')
+axes[1, 0].set_xlabel('Epoch')
+axes[1, 0].set_ylabel('Loss')
+axes[1, 0].legend()
+axes[1, 0].grid(True, alpha=0.3)
+
+# DenseNet121
+axes[0, 1].plot(history_densenet['accuracy'], label='Train', linewidth=2)
+axes[0, 1].plot(history_densenet['val_accuracy'], label='Val', linewidth=2)
+axes[0, 1].axvline(x=len(history_densenet_phase1.history['accuracy']),
+                   color='r', linestyle='--', label='Fine-tuning starts')
+axes[0, 1].set_title('DenseNet121 - Accuracy', fontsize=14, fontweight='bold')
+axes[0, 1].set_xlabel('Epoch')
+axes[0, 1].set_ylabel('Accuracy')
+axes[0, 1].legend()
+axes[0, 1].grid(True, alpha=0.3)
+
+axes[1, 1].plot(history_densenet['loss'], label='Train', linewidth=2)
+axes[1, 1].plot(history_densenet['val_loss'], label='Val', linewidth=2)
+axes[1, 1].axvline(x=len(history_densenet_phase1.history['loss']),
+                   color='r', linestyle='--', label='Fine-tuning starts')
+axes[1, 1].set_title('DenseNet121 - Loss', fontsize=14, fontweight='bold')
+axes[1, 1].set_xlabel('Epoch')
+axes[1, 1].set_ylabel('Loss')
+axes[1, 1].legend()
+axes[1, 1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('training_comparison.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# ============================================================================
+# STEP 4: GET PREDICTIONS FOR ALL MODELS
+# ============================================================================
+
+y_true = []
+y_pred_resnet = []
+y_pred_densenet = []
+
+for images, labels in test_ds:
+    y_true.extend(labels.numpy())
+
+    pred_resnet = model_resnet.predict(images, verbose=0)
+    y_pred_resnet.extend(np.argmax(pred_resnet, axis=1))
+
+    pred_densenet = model_densenet.predict(images, verbose=0)
+    y_pred_densenet.extend(np.argmax(pred_densenet, axis=1))
+
+# ============================================================================
+# STEP 5: CONFUSION MATRICES
+# ============================================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+# ResNet50
+cm_resnet = confusion_matrix(y_true, y_pred_resnet)
+sns.heatmap(cm_resnet, annot=True, fmt='d', cmap='Greens',
+            xticklabels=class_names, yticklabels=class_names, ax=axes[0])
+axes[0].set_title(f'ResNet50\nAccuracy: {test_acc_resnet*100:.2f}%',
+                  fontsize=14, fontweight='bold')
+axes[0].set_ylabel('True Label')
+axes[0].set_xlabel('Predicted Label')
+
+# DenseNet121
+cm_densenet = confusion_matrix(y_true, y_pred_densenet)
+sns.heatmap(cm_densenet, annot=True, fmt='d', cmap='Purples',
+            xticklabels=class_names, yticklabels=class_names, ax=axes[1])
+axes[1].set_title(f'DenseNet121\nAccuracy: {test_acc_densenet*100:.2f}%',
+                  fontsize=14, fontweight='bold')
+axes[1].set_ylabel('True Label')
+axes[1].set_xlabel('Predicted Label')
+
+plt.tight_layout()
+plt.savefig('confusion_matrices_comparison.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# ============================================================================
+# STEP 6: CLASSIFICATION REPORTS
+# ============================================================================
+
+print("\nResNet50 Classification Report:")
+print(classification_report(y_true, y_pred_resnet, target_names=class_names))
+
+print("\nDenseNet121 Classification Report:")
+print(classification_report(y_true, y_pred_densenet, target_names=class_names))
+
+# ============================================================================
+# STEP 7: PERFORMANCE COMPARISON TABLE
+# ============================================================================
+
+precision_resnet, recall_resnet, f1_resnet, _ = precision_recall_fscore_support(
+    y_true, y_pred_resnet, average='weighted'
+)
+precision_densenet, recall_densenet, f1_densenet, _ = precision_recall_fscore_support(
+    y_true, y_pred_densenet, average='weighted'
+)
+
+comparison_df = pd.DataFrame({
+    'Model': ['ResNet50', 'DenseNet121'],
+    'Test Accuracy (%)': [test_acc_resnet*100, test_acc_densenet*100],
+    'Test Loss': [test_loss_resnet, test_loss_densenet],
+    'Precision': [precision_resnet, precision_densenet],
+    'Recall': [recall_resnet, recall_densenet],
+    'F1-Score': [f1_resnet, f1_densenet],
+    'Parameters': [
+        model_resnet.count_params(),
+        model_densenet.count_params()
+    ]
+})
+
+print("\nPerformance Comparison:")
+print("\n" + comparison_df.to_string(index=False))
+
+# Visualize comparison
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+models = comparison_df['Model']
+accuracies = comparison_df['Test Accuracy (%)']
+colors = ['#2ecc71', '#9b59b6']
+
+bars = axes[0].bar(models, accuracies, color=colors, alpha=0.7, edgecolor='black')
+axes[0].set_ylabel('Test Accuracy (%)', fontsize=12)
+axes[0].set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
+axes[0].set_ylim([0, 100])
+axes[0].grid(axis='y', alpha=0.3)
+
+for bar in bars:
+    height = bar.get_height()
+    axes[0].text(bar.get_x() + bar.get_width()/2., height,
+                 f'{height:.2f}%', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+x = np.arange(len(models))
+width = 0.25
+
+bars1 = axes[1].bar(x - width, comparison_df['Precision'], width, label='Precision', alpha=0.8)
+bars2 = axes[1].bar(x, comparison_df['Recall'], width, label='Recall', alpha=0.8)
+bars3 = axes[1].bar(x + width, comparison_df['F1-Score'], width, label='F1-Score', alpha=0.8)
+
+axes[1].set_ylabel('Score', fontsize=12)
+axes[1].set_title('Detailed Metrics Comparison', fontsize=14, fontweight='bold')
+axes[1].set_xticks(x)
+axes[1].set_xticklabels(models)
+axes[1].legend()
+axes[1].set_ylim([0, 1])
+axes[1].grid(axis='y', alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('performance_comparison.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# ============================================================================
+# STEP 8: MODEL SIZE AND EFFICIENCY ANALYSIS
+# ============================================================================
+
+efficiency_df = pd.DataFrame({
+    'Model': ['ResNet50', 'DenseNet121'],
+    'Total Parameters': [
+        f"{model_resnet.count_params():,}",
+        f"{model_densenet.count_params():,}"
+    ],
+    'Trainable Parameters': [
+        f"{sum([tf.keras.backend.count_params(w) for w in model_resnet.trainable_weights]):,}",
+        f"{sum([tf.keras.backend.count_params(w) for w in model_densenet.trainable_weights]):,}"
+    ],
+    'Model Size (MB)': [
+        f"{model_resnet.count_params() * 4 / (1024**2):.2f}",
+        f"{model_densenet.count_params() * 4 / (1024**2):.2f}"
+    ]
+})
+
+print("\nModel Size and Efficiency:")
+print("\n" + efficiency_df.to_string(index=False))
+
+model_resnet.save('resnet50_transfer_learning_final.h5')
+model_densenet.save('densenet121_transfer_learning_final.h5')
+
+print("\nModels saved.")
